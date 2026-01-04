@@ -1,1 +1,2 @@
 viktor==14.26.0
+aps-viewer-sdk
