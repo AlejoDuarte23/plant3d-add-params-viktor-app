@@ -280,8 +280,12 @@ class Controller(vkt.Controller):
             "items": items
         }
 
-    def download_p3d_folder(self, params, **kwargs) -> Path:
-        """Download all files from the parent folder of project.xml and zip them"""
+    def download_p3d_folder(self, params, **kwargs) -> tuple[Path, Path]:
+        """Download all files from the parent folder of project.xml with manifest and zip them.
+        
+        Returns:
+            tuple: (zip_path, manifest_path)
+        """
         project_xml = params.project_xml
         if not project_xml:
             raise vkt.UserError("Please select a project.xml file")
@@ -301,23 +305,35 @@ class Controller(vkt.Controller):
         dl_dir = Path(__file__).parent / "downloaded_files"
         dl_dir.mkdir(exist_ok=True)
         
-        # Download all files from the folder to dl_dir
-        temp_path = acc_helpers.download_acc_folder(token, project_id, folder_id, temp_dir=str(dl_dir))
+        # Create a subfolder to contain the downloaded project files
+        project_folder = dl_dir / "p3d_project"
+        project_folder.mkdir(exist_ok=True)
         
-        # Zip the downloaded folder
+        # Download all files from the folder with manifest into the project folder
+        dl_result = acc_helpers.download_acc_folder_with_manifest(
+            token, project_id, folder_id, temp_dir=str(project_folder), include_subfolders=True
+        )
+        manifest_path = dl_result.manifest_path
+        
+        # Zip the project folder (zip file at same level as the folder)
         zip_path = dl_dir / "p3d_project"
-        shutil.make_archive(str(zip_path), 'zip', temp_path)
+        shutil.make_archive(str(zip_path), 'zip', project_folder)
+        
+        # Also keep manifest next to zip for upload step
+        dest_manifest = dl_dir / "_acc_manifest.json"
+        if manifest_path != dest_manifest:
+            shutil.copy2(manifest_path, dest_manifest)
         
         vkt.UserMessage.success(f"Downloaded and zipped P3D project to: {zip_path}.zip")
-        return Path(f"{zip_path}.zip")
+        return Path(f"{zip_path}.zip"), dest_manifest
     
     def run_worker(self, params, **kwargs) -> None:
         script_path = Path(__file__).parent / "run_addin.py"
         dl_dir = Path(__file__).parent / "downloaded_files"
         dl_dir.mkdir(exist_ok=True)
 
-        # # Download P3D project and get the zip path
-        # p3d_zip_path = self.download_p3d_folder(params, **kwargs)
+        # # Download P3D project and get the zip path + manifest
+        # p3d_zip_path, manifest_path = self.download_p3d_folder(params, **kwargs)
         
         # TESTING: Use local unzipped folder instead of downloading from ACC
         local_p3d_folder = Path(__file__).parent / "acc_download_8xsbl64n"
@@ -346,14 +362,58 @@ class Controller(vkt.Controller):
         ]
         
         script = File.from_path(script_path)
-        analysis = PythonAnalysis(script=script, files=model_files, output_filenames=["plant_run.jsonl"])
+        analysis = PythonAnalysis(
+            script=script,
+            files=model_files,
+            output_filenames=["plant_run.jsonl", "updated_files.zip"],
+        )
         analysis.execute(timeout=300)
 
         output_file_obj = analysis.get_output_file("plant_run.jsonl")
         if output_file_obj is None:
-            raise RuntimeError("Python worker did not produce output")
+            raise RuntimeError("Python worker did not produce plant_run.jsonl")
         
         # Parse JSONL (one JSON object per line)
         jsonl_content = output_file_obj.getvalue()
         contents = [json.loads(line) for line in jsonl_content.strip().splitlines() if line.strip()]
         print(contents)
+        
+        # Get the updated_files.zip from worker
+        updated_zip_obj = analysis.get_output_file("updated_files.zip")
+        if updated_zip_obj is None:
+            raise RuntimeError("Worker did not produce updated_files.zip")
+
+        updated_zip_path = dl_dir / "updated_files.zip"
+        updated_zip_path.write_bytes(updated_zip_obj.getvalue_binary())
+        
+        # Check for manifest (required for upload)
+        manifest_path = dl_dir / "_acc_manifest.json"
+        if not manifest_path.exists():
+            vkt.UserMessage.warning("Missing _acc_manifest.json. Run 'Download P3D project' first to enable upload.")
+            return
+        
+        # Get token for upload
+        integration = vkt.external.OAuth2Integration("aps-integration-viktor")
+        token = integration.get_access_token()
+        
+        # project_id must be the same project as the downloaded folder
+        project_id = params.project_xml.project_id
+        
+        # Upload updated files back to ACC
+        report = acc_helpers.upload_updated_zip_to_acc(
+            token=token,
+            project_id=project_id,
+            manifest_path=manifest_path,
+            updated_zip_path=updated_zip_path,
+        )
+        
+        # Persist the report
+        (dl_dir / "upload_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+        
+        ok_count = sum(1 for r in report if r["status"] == "ok")
+        skipped_count = sum(1 for r in report if r["status"] == "skipped")
+        error_count = sum(1 for r in report if r["status"] == "error")
+        
+        vkt.UserMessage.success(
+            f"Upload complete. ok={ok_count} skipped={skipped_count} errors={error_count}"
+        )
