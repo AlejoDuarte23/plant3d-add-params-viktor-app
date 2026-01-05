@@ -5,6 +5,7 @@ from typing import Any
 
 from aps_viewer_sdk import APSViewer
 from aps_viewer_sdk.helper import get_all_model_properties, get_metadata_viewables
+from app import acc_helpers
 
 def patched_to_md_urn(value: str) -> str:
     """
@@ -209,6 +210,13 @@ class Parametrization(vkt.Parametrization):
     tag_params.tag = vkt.OptionField("PID Tag", options=get_tag_options)
     tag_params.param_name = vkt.TextField("Parameter Name")
     tag_params.value = vkt.TextField("Value")
+    lbk2 = vkt.LineBreak()
+    project_xml = vkt.AutodeskFileField(
+        "Plant 3D Field",
+        oauth2_integration="aps-integration-viktor"
+    )
+    lbk3 = vkt.LineBreak()
+    download_button = vkt.ActionButton("Download P3D project", method="download_p3d_folder")
     
 class Controller(vkt.Controller):
     parametrization = Parametrization
@@ -264,3 +272,25 @@ class Controller(vkt.Controller):
             "version": 1,
             "items": items
         }
+
+    def download_p4d_folder(self, params, **kwargs) -> None:
+        """Download all files from the parent folder of project.xml"""
+        project_xml = params.project_xml
+        if not project_xml:
+            raise vkt.UserError("Please select a project.xml file")
+        
+        integration = vkt.external.OAuth3Integration("aps-integration-viktor")
+        token = integration.get_access_token()
+        
+        # Get project_id and version URN
+        project_id = project_xml.project_id
+        version = project_xml.get_latest_version(token)
+        version_urn = version.urn
+        
+        # Resolve parent folder
+        folder_id = acc_helpers.resolve_parent_folder(project_id, version_urn, token)
+        
+        # Download all files from the folder
+        temp_path = acc_helpers.download_acc_folder(token, project_id, folder_id)
+        
+        vkt.UserMessage.success(f"Downloaded P4D project to: {temp_path}")
