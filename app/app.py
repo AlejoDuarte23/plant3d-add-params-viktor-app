@@ -1,11 +1,16 @@
+import json
 import base64
 import viktor as vkt
 import importlib
 from typing import Any
-
+from pathlib import Path
 from aps_viewer_sdk import APSViewer
 from aps_viewer_sdk.helper import get_all_model_properties, get_metadata_viewables
 from app import acc_helpers
+from viktor.external import PythonAnalysis
+from viktor.core import File
+from io import BytesIO
+import shutil 
 
 def patched_to_md_urn(value: str) -> str:
     """
@@ -217,6 +222,8 @@ class Parametrization(vkt.Parametrization):
     )
     lbk3 = vkt.LineBreak()
     download_button = vkt.ActionButton("Download P3D project", method="download_p3d_folder")
+    lbk4 = vkt.LineBreak()
+    run_worker_button = vkt.ActionButton("Run Worker", method="run_worker")
     
 class Controller(vkt.Controller):
     parametrization = Parametrization
@@ -273,8 +280,8 @@ class Controller(vkt.Controller):
             "items": items
         }
 
-    def download_p3d_folder(self, params, **kwargs) -> None:
-        """Download all files from the parent folder of project.xml"""
+    def download_p3d_folder(self, params, **kwargs) -> Path:
+        """Download all files from the parent folder of project.xml and zip them"""
         project_xml = params.project_xml
         if not project_xml:
             raise vkt.UserError("Please select a project.xml file")
@@ -290,7 +297,63 @@ class Controller(vkt.Controller):
         # Resolve parent folder
         folder_id = acc_helpers.resolve_parent_folder(project_id, version_urn, token)
         
-        # Download all files from the folder
-        temp_path = acc_helpers.download_acc_folder(token, project_id, folder_id)
+        # Create the downloaded_files directory
+        dl_dir = Path(__file__).parent / "downloaded_files"
+        dl_dir.mkdir(exist_ok=True)
         
-        vkt.UserMessage.success(f"Downloaded P4D project to: {temp_path}")
+        # Download all files from the folder to dl_dir
+        temp_path = acc_helpers.download_acc_folder(token, project_id, folder_id, temp_dir=str(dl_dir))
+        
+        # Zip the downloaded folder
+        zip_path = dl_dir / "p3d_project"
+        shutil.make_archive(str(zip_path), 'zip', temp_path)
+        
+        vkt.UserMessage.success(f"Downloaded and zipped P3D project to: {zip_path}.zip")
+        return Path(f"{zip_path}.zip")
+    
+    def run_worker(self, params, **kwargs) -> None:
+        script_path = Path(__file__).parent / "run_addin.py"
+        dl_dir = Path(__file__).parent / "downloaded_files"
+        dl_dir.mkdir(exist_ok=True)
+
+        # # Download P3D project and get the zip path
+        # p3d_zip_path = self.download_p3d_folder(params, **kwargs)
+        
+        # TESTING: Use local unzipped folder instead of downloading from ACC
+        local_p3d_folder = Path(__file__).parent / "acc_download_8xsbl64n"
+        p3d_zip_path = dl_dir / "p3d_project.zip"
+        shutil.make_archive(str(dl_dir / "p3d_project"), 'zip', local_p3d_folder)
+        
+        # Zip the addin folder with DLL
+        addin_folder = Path(__file__).parent / "addin"
+        addin_zip_path = dl_dir / "addin"
+        shutil.make_archive(str(addin_zip_path), 'zip', addin_folder)
+        addin_zip_full_path = Path(f"{addin_zip_path}.zip")
+        
+        # # Build the input JSON
+        # addin_dict = self.build_tag_properties_dict(params, **kwargs)
+        # addin_input_json = json.dumps(addin_dict)
+
+        # TESTING: Use local JSON file instead of building from params
+        local_json_path = Path(__file__).parent / "addin_input.json"
+        addin_input_json = local_json_path.read_text(encoding="utf-8")
+
+        # Prepare all files to send to worker
+        model_files: list[tuple[str, BytesIO | File]] = [
+            ("addin_input.json", BytesIO(addin_input_json.encode("utf-8"))),
+            ("p3d_project.zip", File.from_path(p3d_zip_path)),
+            ("addin.zip", File.from_path(addin_zip_full_path)),
+        ]
+        
+        script = File.from_path(script_path)
+        analysis = PythonAnalysis(script=script, files=model_files, output_filenames=["plant_run.jsonl"])
+        analysis.execute(timeout=300)
+
+        output_file_obj = analysis.get_output_file("plant_run.jsonl")
+        if output_file_obj is None:
+            raise RuntimeError("Python worker did not produce output")
+        
+        # Parse JSONL (one JSON object per line)
+        jsonl_content = output_file_obj.getvalue()
+        contents = [json.loads(line) for line in jsonl_content.strip().splitlines() if line.strip()]
+        print(contents)

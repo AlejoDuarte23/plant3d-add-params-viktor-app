@@ -1,0 +1,60 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <PlantSdkDir>C:\Users\aleja\Documents\AutoCAD Plant 3D 2026 SDK\inc-x64\</PlantSdkDir>
+
+    <AcadDir>C:\Program Files\Autodesk\AutoCAD 2026\</AcadDir>
+    <PlantDir>C:\Program Files\Autodesk\AutoCAD 2026\PLNT3D\</PlantDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="AcCoreMgd">
+      <HintPath>$(AcadDir)AcCoreMgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="AcDbMgd">
+      <HintPath>$(AcadDir)AcDbMgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="AcMgd">
+      <HintPath>$(AcadDir)AcMgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <Reference Include="PnPProjectManagerMgd">
+      <HintPath>$(PlantDir)PnPProjectManagerMgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="PnPDataLinks">
+      <HintPath>$(PlantSdkDir)PnPDataLinks.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="PnPDataObjects">
+      <HintPath>$(PlantSdkDir)PnPDataObjects.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="PnPCommonMgd">
+      <HintPath>$(PlantSdkDir)PnPCommonMgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="PnP3dDataLinkManager">
+      <HintPath>$(PlantSdkDir)PnP3dDataLinkManager.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <Reference Include="PnP3dProjectPartsMgd">
+      <HintPath>$(PlantDir)PnP3dProjectPartsMgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="PnIdProjectPartsMgd">
+      <HintPath>$(PlantDir)PnIdProjectPartsMgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>
