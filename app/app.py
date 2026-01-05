@@ -164,6 +164,39 @@ def get_viewables(params, **kwargs):
     return options
 
 
+def get_tag_options(params, **kwargs):
+    """Gets option list elements for PID tags from the selected view"""
+    autodesk_file = params.autodesk_file
+    if not autodesk_file:
+        return []
+    
+    selected_guid = params.selected_view
+    if not selected_guid:
+        return []
+
+    integration = vkt.external.OAuth2Integration("aps-integration-viktor")
+    token = integration.get_access_token()
+    version = autodesk_file.get_latest_version(token)
+    version_urn = version.urn
+    urn_bs64 = patched_to_md_urn(version_urn)
+    
+    # Get cached tag index
+    tag_index = get_tag_index_cached(
+        token=token,
+        urn_bs64=urn_bs64,
+        model_guid=selected_guid
+    )
+    
+    if not tag_index:
+        return []
+    
+    options = []
+    for tag in sorted(tag_index.keys()):
+        options.append(vkt.OptionListElement(label=tag, value=tag))
+    
+    return options
+
+
 class Parametrization(vkt.Parametrization):
     autodesk_file = vkt.AutodeskFileField(
         "Plant 3D Field",
@@ -172,6 +205,12 @@ class Parametrization(vkt.Parametrization):
     lbk0 = vkt.LineBreak()
     selected_view = vkt.OptionField("Select Plant3D Viewable", options=get_viewables)
     lbk1 = vkt.LineBreak()
+    tag_params = vkt.DynamicArray("Tag Parameters", row_label="Tag", copylast=True)
+    tag_params.tag = vkt.OptionField("PID Tag", options=get_tag_options)
+    tag_params.param_name = vkt.TextField("Parameter Name")
+    tag_params.value = vkt.TextField("Value")
+    
+    lbk2 = vkt.LineBreak()
     properties_button = vkt.ActionButton("Get Model Properties", method="get_properties")
 
 class Controller(vkt.Controller):
