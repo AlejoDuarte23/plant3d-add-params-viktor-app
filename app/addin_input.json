@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "match": { "tag": "MV-304" },
+      "properties": {
+        "Manufacturer": "ACME Valves",
+        "Comment": "Installed during rev B"
+      }
+    },
+    {
+      "match": { "rowId": 1864 },
+      "properties": {
+        "Comment": "RowId-based update (does not depend on Tag uniqueness)"
+      }
+    }
+  ]
+}

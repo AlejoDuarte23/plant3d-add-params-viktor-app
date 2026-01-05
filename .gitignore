@@ -161,3 +161,17 @@ app/acc_download_8xsbl64n
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+# build outputs
+app/**/bin/
+app/**/obj/
+
+# generated downloads
+app/downloaded_files/
+
+# optional: zips anywhere (only if you never want them committed)
+# *.zip
+
+# optional: VS / dotnet noise
+*.user
+*.suo
+*.cache
