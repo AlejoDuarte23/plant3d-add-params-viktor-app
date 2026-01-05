@@ -167,11 +167,3 @@ app/**/obj/
 
 # generated downloads
 app/downloaded_files/
-
-# optional: zips anywhere (only if you never want them committed)
-# *.zip
-
-# optional: VS / dotnet noise
-*.user
-*.suo
-*.cache

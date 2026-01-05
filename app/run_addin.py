@@ -1,16 +1,19 @@
 import os
+import json
 import subprocess
 import zipfile
 from pathlib import Path
+from datetime import datetime, timezone
 
 OUTPUT_LOG_FILENAME = "plant_run.jsonl"
+UPDATED_ZIP_FILENAME = "updated_files.zip"
 
 
 def unzip_file(zip_path: Path, extract_to: Path) -> Path:
     """Unzip a file to the specified directory."""
     extract_to.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-        zip_ref.extractall(extract_to)
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        zf.extractall(extract_to)
     return extract_to
 
 
@@ -88,6 +91,76 @@ def apply_metadata_rev(
     return completed.returncode
 
 
+def _parse_updated_drawings_from_jsonl(jsonl_path: Path) -> list[Path]:
+    """Parse plant_run.jsonl and extract paths of updated drawings."""
+    updated: list[Path] = []
+    if not jsonl_path.exists():
+        return updated
+    for line in jsonl_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        rec = json.loads(line)
+        if rec.get("type") == "drawing" and (rec.get("updated") or 0) > 0:
+            p = rec.get("drawing")
+            if isinstance(p, str) and p:
+                updated.append(Path(p))
+    return updated
+
+
+def _zip_updated_files(
+    *,
+    zip_path: Path,
+    project_root: Path,
+    updated_paths: list[Path],
+    log_path: Path,
+) -> None:
+    """
+    Create updated_files.zip with:
+      - plant_run.jsonl
+      - updated drawings stored as paths relative to project_root when possible
+      - a small manifest file describing what was included
+    """
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
+
+    included_files: list[str] = []
+    skipped_files: list[str] = []
+
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        # always include the log
+        if log_path.exists():
+            zf.write(log_path, arcname=OUTPUT_LOG_FILENAME)
+            included_files.append(OUTPUT_LOG_FILENAME)
+
+        for p in updated_paths:
+            try:
+                p = p.resolve()
+                if not p.exists():
+                    skipped_files.append(str(p))
+                    continue
+
+                # Prefer relative paths under the extracted project root
+                try:
+                    rel = p.relative_to(project_root.resolve())
+                    arcname = rel.as_posix()
+                except Exception:
+                    # Fallback: store in a flat folder (still uploadable only if you can map it later)
+                    arcname = f"_external/{p.name}"
+
+                zf.write(p, arcname=arcname)
+                included_files.append(arcname)
+            except Exception:
+                skipped_files.append(str(p))
+
+        manifest = {
+            "createdUtc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "projectRoot": str(project_root),
+            "included": included_files,
+            "skipped": skipped_files,
+        }
+        zf.writestr("_manifest.json", json.dumps(manifest, indent=2))
+
+
 def main() -> int:
     """Main entry point for the worker script.
     
@@ -140,12 +213,24 @@ def main() -> int:
     if not plugin_dll.exists():
         raise FileNotFoundError(f"MetadataApplier.dll not found at {plugin_dll}")
     
-    return apply_metadata_rev(
+    code = apply_metadata_rev(
         project_xml=project_xml,
         json_in=json_in,
         plugin_dll=plugin_dll,
         log_path=log_path,
     )
+
+    # Create updated_files.zip (even if code != 0, for debugging)
+    updated = _parse_updated_drawings_from_jsonl(log_path)
+    updated_zip = cwd / UPDATED_ZIP_FILENAME
+    _zip_updated_files(
+        zip_path=updated_zip,
+        project_root=p3d_extract_dir,
+        updated_paths=updated,
+        log_path=log_path,
+    )
+
+    return code
 
 
 if __name__ == "__main__":
