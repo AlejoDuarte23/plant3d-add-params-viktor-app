@@ -273,13 +273,13 @@ class Controller(vkt.Controller):
             "items": items
         }
 
-    def download_p4d_folder(self, params, **kwargs) -> None:
+    def download_p3d_folder(self, params, **kwargs) -> None:
         """Download all files from the parent folder of project.xml"""
         project_xml = params.project_xml
         if not project_xml:
             raise vkt.UserError("Please select a project.xml file")
         
-        integration = vkt.external.OAuth3Integration("aps-integration-viktor")
+        integration = vkt.external.OAuth2Integration("aps-integration-viktor")
         token = integration.get_access_token()
         
         # Get project_id and version URN

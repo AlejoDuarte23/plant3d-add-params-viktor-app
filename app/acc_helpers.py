@@ -5,6 +5,8 @@ import json
 import re
 from typing import Any
 from pathlib import Path
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 BASE_URL = "https://developer.api.autodesk.com"
@@ -145,6 +147,86 @@ def get_storage_urn_from_folder_entry(token: str, project_id: str, entry: dict[s
     raise RuntimeError(f"Unsupported folder entry type '{entry_type}' for download: {entry_id}")
 
 
+def parse_storage_urn(storage_urn: str) -> tuple[str, str] | None:
+    """Extract bucket and object key from storage URN."""
+    if not storage_urn.startswith("urn:"):
+        return None
+    parts = storage_urn.split(":")
+    if len(parts) < 4:
+        return None
+    object_path = parts[-1]
+    if "/" not in object_path:
+        return None
+    bucket_key, object_key = object_path.split("/", 1)
+    return bucket_key, object_key
+
+
+def batch_get_signed_s3_download_urls(
+    session: requests.Session,
+    *,
+    token: str,
+    bucket_key: str,
+    object_keys: list[str],
+    minutes_expiration: int = 10,
+    public_resource_fallback: bool = True,
+) -> dict[str, str]:
+    """Batch fetch signed URLs for multiple objects."""
+    if not object_keys:
+        return {}
+
+    # Endpoint supports minutesExpiration + public-resource-fallback
+    params = {
+        "minutesExpiration": str(max(1, min(60, minutes_expiration))),
+    }
+    if public_resource_fallback:
+        params["public-resource-fallback"] = "true"
+
+    # The API expects URL-encoded objectKey values in the request body
+    encoded_to_raw: dict[str, str] = {}
+    requests_payload: list[dict[str, Any]] = []
+    for raw_ok in object_keys:
+        enc_ok = urllib.parse.quote(raw_ok, safe="")  # encode '/' too
+        encoded_to_raw[enc_ok] = raw_ok
+        requests_payload.append({"objectKey": enc_ok})
+
+    url = f"{OSS_V2}/buckets/{bucket_key}/objects/batchsigneds3download"
+    resp = session.post(
+        url,
+        headers={**bearer(token), "Content-Type": "application/json"},
+        params=params,
+        json={"requests": requests_payload},
+        timeout=30,
+    )
+    resp.raise_for_status()
+
+    payload = resp.json()
+    results: dict[str, Any] = payload.get("results", {}) or {}
+
+    out: dict[str, str] = {}
+    for key_in_results, result in results.items():
+        if not isinstance(result, dict):
+            continue
+
+        status = result.get("status")
+        raw_ok = encoded_to_raw.get(key_in_results, key_in_results)
+
+        # For complete/fallback, "url" is returned
+        direct_url = result.get("url")
+        if isinstance(direct_url, str) and direct_url:
+            out[raw_ok] = direct_url
+            continue
+
+        # If chunked and you didn't set public-resource-fallback, you may get "urls" map.
+        # Keep a fallback that picks the first chunk URL.
+        urls_map = result.get("urls")
+        if status == "chunked" and isinstance(urls_map, dict) and urls_map:
+            first_url = next(iter(urls_map.values()), None)
+            if isinstance(first_url, str) and first_url:
+                out[raw_ok] = first_url
+
+    return out
+
+
 def get_signed_download_url(token: str, storage_urn: str) -> str:
     """Get signed S3 download URL from storage URN.
     
@@ -185,6 +267,42 @@ def download_file(url: str, destination: Path) -> None:
                 f.write(chunk)
 
 
+def download_file_with_session(session: requests.Session, url: str, destination: Path) -> None:
+    """Download file using shared session."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with session.get(url, stream=True, timeout=120) as r:
+        r.raise_for_status()
+        with open(destination, "wb") as f:
+            for chunk in r.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    f.write(chunk)
+
+
+def download_many_signed_urls(
+    session: requests.Session,
+    *,
+    url_by_path: dict[Path, str],
+    max_workers: int = 8,
+) -> list[Path]:
+    """Download multiple files in parallel."""
+    downloaded: list[Path] = []
+
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futs = {
+            ex.submit(download_file_with_session, session, url, path): path
+            for path, url in url_by_path.items()
+        }
+        for fut in as_completed(futs):
+            path = futs[fut]
+            try:
+                fut.result()
+                downloaded.append(path)
+            except Exception as e:
+                print(f"  ✗ Error downloading {path.name}: {e}")
+
+    return downloaded
+
+
 def download_item(token: str, project_id: str, entry: dict[str, Any], destination_path: Path) -> Path:
     """Download a single file item."""
     attributes = entry.get("attributes", {})
@@ -205,9 +323,9 @@ def download_acc_folder(
     temp_dir: str | None = None,
     *,
     include_subfolders: bool = True,
+    max_workers: int = 8,
 ) -> Path:
-    """Download all files from ACC folder to temp directory.
-    """
+    """Download ACC folder with batching and parallel downloads."""
     if temp_dir is None:
         root = Path(tempfile.mkdtemp(prefix="acc_download_"))
     else:
@@ -216,36 +334,95 @@ def download_acc_folder(
 
     print(f"Downloading folder contents to: {root}")
 
+    # Use a shared session for connection pooling
+    session = requests.Session()
+
     stack: list[tuple[str, Path]] = [(folder_id, root)]
-    downloaded: list[Path] = []
+    all_downloaded: list[Path] = []
 
-    while stack:
-        current_folder_id, current_path = stack.pop()
-        items = get_folder_contents_by_id(token, project_id, current_folder_id)
-        print(f"Found {len(items)} items in folder {current_folder_id}")
+    try:
+        while stack:
+            current_folder_id, current_path = stack.pop()
+            items = get_folder_contents_by_id(token, project_id, current_folder_id)
+            print(f"Found {len(items)} items in folder {current_folder_id}")
 
-        for entry in items:
-            entry_type = entry.get("type")
-            attributes = entry.get("attributes", {})
-            display_name = attributes.get("displayName", "unknown")
+            # Collect files and subfolders
+            files_to_download: list[tuple[str, str]] = []  # (display_name, storage_urn)
+            subfolders: list[tuple[str, Path]] = []
 
-            if entry_type == "folders":
-                if include_subfolders:
-                    sub_id = entry.get("id")
-                    if sub_id:
-                        sub_path = current_path / display_name
-                        stack.append((sub_id, sub_path))
-                else:
-                    print(f"Skipping subfolder: {display_name}")
-                continue
+            for entry in items:
+                entry_type = entry.get("type")
+                attributes = entry.get("attributes", {})
+                display_name = attributes.get("displayName", "unknown")
 
-            print(f"Downloading: {display_name}")
-            try:
-                fp = download_item(token, project_id, entry, current_path)
-                downloaded.append(fp)
-                print(f"  ✓ Downloaded to: {fp}")
-            except Exception as e:
-                print(f"  ✗ Error downloading {display_name}: {e}")
+                if entry_type == "folders":
+                    if include_subfolders:
+                        sub_id = entry.get("id")
+                        if sub_id:
+                            sub_path = current_path / display_name
+                            subfolders.append((sub_id, sub_path))
+                    else:
+                        print(f"Skipping subfolder: {display_name}")
+                    continue
 
-    print(f"\nDownload complete! {len(downloaded)} files downloaded to {root}")
+                # Get storage URN for file
+                try:
+                    storage_urn = get_storage_urn_from_folder_entry(token, project_id, entry)
+                    files_to_download.append((display_name, storage_urn))
+                except Exception as e:
+                    print(f"  ✗ Error resolving storage for {display_name}: {e}")
+
+            # Add subfolders to stack
+            stack.extend(subfolders)
+
+            # Batch download files
+            if files_to_download:
+                print(f"Batch downloading {len(files_to_download)} files...")
+
+                # Group by bucket for batch calls
+                bucket_to_object_keys: dict[str, list[str]] = defaultdict(list)
+                objectkey_to_dest: dict[tuple[str, str], Path] = {}  # (bucket, objectKey) -> dest path
+
+                for display_name, storage_urn in files_to_download:
+                    parsed = parse_storage_urn(storage_urn)
+                    if not parsed:
+                        print(f"  ✗ Invalid storage URN for {display_name}")
+                        continue
+                    bucket_key, object_key = parsed
+                    bucket_to_object_keys[bucket_key].append(object_key)
+                    objectkey_to_dest[(bucket_key, object_key)] = current_path / display_name
+
+                # Batch fetch signed URLs, then download in parallel
+                url_by_path: dict[Path, str] = {}
+                for bucket_key, object_keys in bucket_to_object_keys.items():
+                    try:
+                        signed = batch_get_signed_s3_download_urls(
+                            session,
+                            token=token,
+                            bucket_key=bucket_key,
+                            object_keys=object_keys,
+                            minutes_expiration=10,
+                            public_resource_fallback=True,
+                        )
+                        for object_key, signed_url in signed.items():
+                            dest = objectkey_to_dest.get((bucket_key, object_key))
+                            if dest:
+                                url_by_path[dest] = signed_url
+                    except Exception as e:
+                        print(f"  ✗ Error fetching signed URLs for bucket {bucket_key}: {e}")
+
+                # Download all files in parallel
+                if url_by_path:
+                    downloaded = download_many_signed_urls(
+                        session,
+                        url_by_path=url_by_path,
+                        max_workers=max_workers,
+                    )
+                    all_downloaded.extend(downloaded)
+                    print(f"  ✓ Downloaded {len(downloaded)}/{len(files_to_download)} files")
+
+    finally:
+        session.close()
+
+    print(f"\nDownload complete! {len(all_downloaded)} files downloaded to {root}")
     return root
