@@ -210,9 +210,6 @@ class Parametrization(vkt.Parametrization):
     tag_params.param_name = vkt.TextField("Parameter Name")
     tag_params.value = vkt.TextField("Value")
     
-    lbk2 = vkt.LineBreak()
-    properties_button = vkt.ActionButton("Get Model Properties", method="get_properties")
-
 class Controller(vkt.Controller):
     parametrization = Parametrization
 
@@ -230,35 +227,6 @@ class Controller(vkt.Controller):
         viewer = APSViewer(urn=version_urn, token=token)
         html = viewer.write()
         return vkt.WebResult(html=html)
-    
-    def get_properties(self, params, **kwargs) -> None:
-        """Get all model properties for selected view and build Tag index"""
-        autodesk_file = params.autodesk_file
-        if not autodesk_file:
-            raise vkt.UserError("Please select a Plant 3D file first")
-        
-        selected_guid = params.selected_view
-        if not selected_guid:
-            raise vkt.UserError("Please select a viewable first")
-        
-        # Get authentication and version URN
-        integration = vkt.external.OAuth2Integration("aps-integration-viktor")
-        token = integration.get_access_token()
-        version = autodesk_file.get_latest_version(token)
-        version_urn = version.urn
-        urn_bs64 = patched_to_md_urn(version_urn)
-        
-        # Get cached tag index (memoized to avoid repeated API calls)
-        tag_index = get_tag_index_cached(
-            token=token,
-            urn_bs64=urn_bs64,
-            model_guid=selected_guid
-        )
-        
-        if not tag_index:
-            raise vkt.UserError("No PID elements with Tags found in the selected view")
-
-        print(tag_index)
     
     def build_tag_properties_dict(self, params, **kwargs) -> dict[str, Any]:
         """Convert dynamic array into structured properties dictionary"""
