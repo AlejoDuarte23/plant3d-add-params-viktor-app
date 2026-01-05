@@ -259,3 +259,40 @@ class Controller(vkt.Controller):
             raise vkt.UserError("No PID elements with Tags found in the selected view")
 
         print(tag_index)
+    
+    def build_tag_properties_dict(self, params, **kwargs) -> dict[str, Any]:
+        """Convert dynamic array into structured properties dictionary"""
+        tag_params = params.tag_params
+        if not tag_params:
+            return {"version": 1, "items": []}
+        
+        # Group parameters by tag
+        tag_groups: dict[str, dict[str, str]] = {}
+        for row in tag_params:
+            tag = row.get("tag")
+            param_name = row.get("param_name")
+            value = row.get("value")
+            
+            # Skip incomplete rows
+            if not tag or not param_name or not value:
+                continue
+            
+            # Initialize tag group if not exists
+            if tag not in tag_groups:
+                tag_groups[tag] = {}
+            
+            # Add parameter to the tag's properties
+            tag_groups[tag][param_name] = value
+        
+        # Build the final structure
+        items = []
+        for tag, properties in tag_groups.items():
+            items.append({
+                "match": {"tag": tag},
+                "properties": properties
+            })
+        
+        return {
+            "version": 1,
+            "items": items
+        }
