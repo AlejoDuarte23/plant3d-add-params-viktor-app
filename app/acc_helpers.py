@@ -3,6 +3,7 @@ import requests
 import urllib.parse
 import json
 import re
+import viktor as vkt
 from typing import Any
 from pathlib import Path
 from collections import defaultdict
@@ -297,8 +298,8 @@ def download_many_signed_urls(
             try:
                 fut.result()
                 downloaded.append(path)
-            except Exception as e:
-                print(f"  ✗ Error downloading {path.name}: {e}")
+            except Exception:
+                pass
 
     return downloaded
 
@@ -332,11 +333,9 @@ def download_acc_folder(
         root = Path(temp_dir)
         root.mkdir(parents=True, exist_ok=True)
 
-    print(f"Downloading folder contents to: {root}")
+    vkt.UserMessage.info(f"Starting download to: {root}")
 
-    # Use a shared session for connection pooling
     session = requests.Session()
-
     stack: list[tuple[str, Path]] = [(folder_id, root)]
     all_downloaded: list[Path] = []
 
@@ -344,10 +343,10 @@ def download_acc_folder(
         while stack:
             current_folder_id, current_path = stack.pop()
             items = get_folder_contents_by_id(token, project_id, current_folder_id)
-            print(f"Found {len(items)} items in folder {current_folder_id}")
+            
+            vkt.UserMessage.info(f"Found {len(items)} items in folder")
 
-            # Collect files and subfolders
-            files_to_download: list[tuple[str, str]] = []  # (display_name, storage_urn)
+            files_to_download: list[tuple[str, str]] = []
             subfolders: list[tuple[str, Path]] = []
 
             for entry in items:
@@ -361,38 +360,30 @@ def download_acc_folder(
                         if sub_id:
                             sub_path = current_path / display_name
                             subfolders.append((sub_id, sub_path))
-                    else:
-                        print(f"Skipping subfolder: {display_name}")
                     continue
 
-                # Get storage URN for file
                 try:
                     storage_urn = get_storage_urn_from_folder_entry(token, project_id, entry)
                     files_to_download.append((display_name, storage_urn))
-                except Exception as e:
-                    print(f"  ✗ Error resolving storage for {display_name}: {e}")
+                except Exception:
+                    pass
 
-            # Add subfolders to stack
             stack.extend(subfolders)
 
-            # Batch download files
             if files_to_download:
-                print(f"Batch downloading {len(files_to_download)} files...")
+                vkt.UserMessage.info(f"Batch downloading {len(files_to_download)} files...")
 
-                # Group by bucket for batch calls
                 bucket_to_object_keys: dict[str, list[str]] = defaultdict(list)
-                objectkey_to_dest: dict[tuple[str, str], Path] = {}  # (bucket, objectKey) -> dest path
+                objectkey_to_dest: dict[tuple[str, str], Path] = {}
 
                 for display_name, storage_urn in files_to_download:
                     parsed = parse_storage_urn(storage_urn)
                     if not parsed:
-                        print(f"  ✗ Invalid storage URN for {display_name}")
                         continue
                     bucket_key, object_key = parsed
                     bucket_to_object_keys[bucket_key].append(object_key)
                     objectkey_to_dest[(bucket_key, object_key)] = current_path / display_name
 
-                # Batch fetch signed URLs, then download in parallel
                 url_by_path: dict[Path, str] = {}
                 for bucket_key, object_keys in bucket_to_object_keys.items():
                     try:
@@ -408,10 +399,9 @@ def download_acc_folder(
                             dest = objectkey_to_dest.get((bucket_key, object_key))
                             if dest:
                                 url_by_path[dest] = signed_url
-                    except Exception as e:
-                        print(f"  ✗ Error fetching signed URLs for bucket {bucket_key}: {e}")
+                    except Exception:
+                        pass
 
-                # Download all files in parallel
                 if url_by_path:
                     downloaded = download_many_signed_urls(
                         session,
@@ -419,10 +409,10 @@ def download_acc_folder(
                         max_workers=max_workers,
                     )
                     all_downloaded.extend(downloaded)
-                    print(f"  ✓ Downloaded {len(downloaded)}/{len(files_to_download)} files")
+                    vkt.UserMessage.info(f"Downloaded {len(downloaded)}/{len(files_to_download)} files")
 
     finally:
         session.close()
 
-    print(f"\nDownload complete! {len(all_downloaded)} files downloaded to {root}")
+    vkt.UserMessage.success(f"Download complete! {len(all_downloaded)} files downloaded to {root}")
     return root
