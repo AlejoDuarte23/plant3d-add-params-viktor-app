@@ -201,14 +201,8 @@ def main() -> int:
     addin_extract_dir = cwd / "addin"
     unzip_file(addin_zip, addin_extract_dir)
     
-    # Find the DLL in the extracted addin folder
-    plugin_dll = (
-        addin_extract_dir
-        / "bin"
-        / "Release"
-        / "net8.0-windows"
-        / "MetadataApplier.dll"
-    )
+    # Find the DLL in the extracted addin folder (flat structure in addin_release)
+    plugin_dll = addin_extract_dir / "MetadataApplier.dll"
     
     if not plugin_dll.exists():
         raise FileNotFoundError(f"MetadataApplier.dll not found at {plugin_dll}")
