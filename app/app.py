@@ -332,27 +332,22 @@ class Controller(vkt.Controller):
         dl_dir = Path(__file__).parent / "downloaded_files"
         dl_dir.mkdir(exist_ok=True)
 
-        # # Download P3D project and get the zip path + manifest
-        # p3d_zip_path, manifest_path = self.download_p3d_folder(params, **kwargs)
+        vkt.UserMessage.info("Starting Plant 3D worker pipeline...")
+
+        # Download P3D project and get the zip path + manifest
+        p3d_zip_path, manifest_path = self.download_p3d_folder(params, **kwargs)
         
-        # TESTING: Use local unzipped folder instead of downloading from ACC
-        local_p3d_folder = Path(__file__).parent / "acc_download_8xsbl64n"
-        p3d_zip_path = dl_dir / "p3d_project.zip"
-        shutil.make_archive(str(dl_dir / "p3d_project"), 'zip', local_p3d_folder)
-        
-        # Zip the addin folder with DLL
-        addin_folder = Path(__file__).parent / "addin"
+        # Zip the addin release folder with DLL
+        vkt.UserMessage.info("Preparing addin package...")
+        addin_release_folder = Path(__file__).parent / "addin_release"
         addin_zip_path = dl_dir / "addin"
-        shutil.make_archive(str(addin_zip_path), 'zip', addin_folder)
+        shutil.make_archive(str(addin_zip_path), 'zip', addin_release_folder)
         addin_zip_full_path = Path(f"{addin_zip_path}.zip")
         
-        # # Build the input JSON
-        # addin_dict = self.build_tag_properties_dict(params, **kwargs)
-        # addin_input_json = json.dumps(addin_dict)
-
-        # TESTING: Use local JSON file instead of building from params
-        local_json_path = Path(__file__).parent / "addin_input.json"
-        addin_input_json = local_json_path.read_text(encoding="utf-8")
+        # Build the input JSON from params
+        vkt.UserMessage.info("Building metadata input JSON...")
+        addin_dict = self.build_tag_properties_dict(params, **kwargs)
+        addin_input_json = json.dumps(addin_dict)
 
         # Prepare all files to send to worker
         model_files: list[tuple[str, BytesIO | File]] = [
@@ -361,6 +356,7 @@ class Controller(vkt.Controller):
             ("addin.zip", File.from_path(addin_zip_full_path)),
         ]
         
+        vkt.UserMessage.info("Executing Plant 3D worker...")
         script = File.from_path(script_path)
         analysis = PythonAnalysis(
             script=script,
@@ -369,6 +365,7 @@ class Controller(vkt.Controller):
         )
         analysis.execute(timeout=300)
 
+        vkt.UserMessage.info("Retrieving worker outputs...")
         output_file_obj = analysis.get_output_file("plant_run.jsonl")
         if output_file_obj is None:
             raise RuntimeError("Python worker did not produce plant_run.jsonl")
@@ -393,6 +390,7 @@ class Controller(vkt.Controller):
             return
         
         # Get token for upload
+        vkt.UserMessage.info("Uploading updated files to ACC...")
         integration = vkt.external.OAuth2Integration("aps-integration-viktor")
         token = integration.get_access_token()
         
