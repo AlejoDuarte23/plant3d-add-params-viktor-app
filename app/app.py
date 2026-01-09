@@ -204,25 +204,39 @@ def get_tag_options(params, **kwargs):
 
 
 class Parametrization(vkt.Parametrization):
+    title = vkt.Text("""# Plant 3D - Integration
+This application allows users to add custom metadata to Plant 3D elements based on their PID tags. 
+Select a Plant 3D model, choose a viewable, configure tag parameters, and run the worker to apply changes.
+    """)
+    
+    header1 = vkt.Text("""## 1. Select Plant 3D Model""")
     autodesk_file = vkt.AutodeskFileField(
         "Plant 3D Field",
         oauth2_integration="aps-integration-viktor"
     )
+    
     lbk0 = vkt.LineBreak()
+    header2 = vkt.Text("""## 2. Select Viewable""")
     selected_view = vkt.OptionField("Select Plant3D Viewable", options=get_viewables)
+    
     lbk1 = vkt.LineBreak()
+    header3 = vkt.Text("""## 3. Configure Tag Parameters""")
     tag_params = vkt.DynamicArray("Tag Parameters", row_label="Tag", copylast=True)
     tag_params.tag = vkt.OptionField("PID Tag", options=get_tag_options)
     tag_params.param_name = vkt.TextField("Parameter Name")
     tag_params.value = vkt.TextField("Value")
+    
     lbk2 = vkt.LineBreak()
+    header4 = vkt.Text("""## 4. Select Project XML""")
     project_xml = vkt.AutodeskFileField(
-        "Plant 3D Field",
+        "Plant 3D Project",
         oauth2_integration="aps-integration-viktor"
     )
+    
     lbk3 = vkt.LineBreak()
-    download_button = vkt.ActionButton("Download P3D project", method="download_p3d_folder")
-    lbk4 = vkt.LineBreak()
+    header5 = vkt.Text("""## 5. Execute Metadata Update""")
+    #download_button = vkt.ActionButton("Download P3D project", method="download_p3d_folder")
+    #lbk4 = vkt.LineBreak()
     run_worker_button = vkt.ActionButton("Run Worker", method="run_worker")
     
 class Controller(vkt.Controller):
